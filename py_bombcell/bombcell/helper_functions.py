@@ -748,6 +748,7 @@ def get_all_quality_metrics(
     param,
     save_path,
     gui_data=None,
+    raw_waveforms_id_match=None,
 ):
     """
     This function runs all of the quality metric calculations
@@ -970,6 +971,7 @@ def get_all_quality_metrics(
             channel_positions,
             waveform_baseline_window,
             param,
+            unit_idx=unit_idx,
         )
         runtimes_waveform_shape[unit_idx] = time.time() - time_tmp
 
@@ -1008,11 +1010,24 @@ def get_all_quality_metrics(
 
         # amplitude
         if raw_waveforms_full is not None and param["extractRaw"] and param['gain_to_uV'] is not None:
-            # Use the template's peak channel for raw amplitude calculation
-            template_peak_channel = quality_metrics["maxChannels"][unit_idx]
-            quality_metrics["rawAmplitude"][unit_idx] = qm.get_raw_amplitude(
-                raw_waveforms_full[unit_idx], param["gain_to_uV"], peak_channel=template_peak_channel
-            )
+            # Use raw_waveforms_id_match to access waveforms by cluster ID (this_unit) when available
+            if raw_waveforms_id_match is not None and this_unit < raw_waveforms_id_match.shape[0]:
+                template_peak_channel = quality_metrics["maxChannels"][unit_idx]
+                raw_wf_for_unit = raw_waveforms_id_match[this_unit]
+                if not np.any(np.isnan(raw_wf_for_unit)) and raw_wf_for_unit.size > 0:
+                    quality_metrics["rawAmplitude"][unit_idx] = qm.get_raw_amplitude(
+                        raw_wf_for_unit, param["gain_to_uV"], peak_channel=template_peak_channel
+                    )
+                else:
+                    quality_metrics["rawAmplitude"][unit_idx] = np.nan
+            else:
+                template_peak_channel = quality_metrics["maxChannels"][unit_idx]
+                if unit_idx < len(raw_waveforms_full):
+                    quality_metrics["rawAmplitude"][unit_idx] = qm.get_raw_amplitude(
+                        raw_waveforms_full[unit_idx], param["gain_to_uV"], peak_channel=template_peak_channel
+                    )
+                else:
+                    quality_metrics["rawAmplitude"][unit_idx] = np.nan
         else:
             quality_metrics["rawAmplitude"][unit_idx] = np.nan
 
@@ -1162,6 +1177,9 @@ def run_bombcell(ks_dir, save_path, param, save_figures=False, return_figures=Fa
         raw_waveforms_id_match = None
         param["extractRaw"] = False  # No waveforms to extract!
 
+    # Store all unique units from original spike_clusters before duplicate removal
+    all_unique_units_original = np.unique(spike_clusters)
+
     # Remove duplicate spikes
     if param["removeDuplicateSpikes"]:
         (
@@ -1187,6 +1205,8 @@ def run_bombcell(ks_dir, save_path, param, save_figures=False, return_figures=Fa
             raw_waveforms_peak_channel=raw_waveforms_peak_channel,
             signal_to_noise_ratio=signal_to_noise_ratio,
         )
+        # Include all unique units from original spike_clusters, even if all their spikes were removed as duplicates
+        non_empty_units = np.unique(np.concatenate([non_empty_units, all_unique_units_original]))
     else:
         non_empty_units = np.unique(spike_clusters)
 
@@ -1203,13 +1223,29 @@ def run_bombcell(ks_dir, save_path, param, save_figures=False, return_figures=Fa
             (np.min(spike_times_seconds), np.max(spike_times_seconds))
         )
 
-    unique_templates = non_empty_units # template ids are cluster ids, in bombcell
+    unique_templates = non_empty_units  # template ids are cluster ids, in bombcell
     param['unique_templates'] = unique_templates
 
     # Initialize quality metrics dictionary
     n_units = unique_templates.size
-    quality_metrics = create_quality_metrics_dict(n_units, snr=signal_to_noise_ratio)
-    quality_metrics["maxChannels"] = maxChannels
+
+    # Expand signal_to_noise_ratio to match unique_templates size if needed
+    expanded_snr = None
+    if signal_to_noise_ratio is not None:
+        expanded_snr = np.full(n_units, np.nan, dtype=float)
+        for unit_idx, template_id in enumerate(unique_templates):
+            if template_id < len(signal_to_noise_ratio):
+                expanded_snr[unit_idx] = signal_to_noise_ratio[template_id]
+
+    quality_metrics = create_quality_metrics_dict(n_units, snr=expanded_snr)
+
+    # Expand maxChannels to match unique_templates size (indexed by cluster ID from get_waveform_peak_channel)
+    maxChannels_by_cluster = qm.get_waveform_peak_channel(template_waveforms)
+    expanded_maxChannels = np.full(n_units, np.nan, dtype=float)
+    for unit_idx, template_id in enumerate(unique_templates):
+        if template_id < len(maxChannels_by_cluster):
+            expanded_maxChannels[unit_idx] = maxChannels_by_cluster[template_id]
+    quality_metrics["maxChannels"] = expanded_maxChannels
 
     # Complete with remaining quality metrics  
     if param.get("verbose", False):
@@ -1230,6 +1266,7 @@ def run_bombcell(ks_dir, save_path, param, save_figures=False, return_figures=Fa
         template_waveforms,
         param,
         save_path,
+        raw_waveforms_id_match=raw_waveforms_id_match,
     )
 
     if param.get("verbose", False):

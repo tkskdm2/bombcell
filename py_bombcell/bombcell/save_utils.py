@@ -298,9 +298,11 @@ def save_results(
 
     # Get rid of peak channels of empty rows, which were kept for convenient indexing up to here
     quality_metrics_save = quality_metrics.copy()
-    quality_metrics_save["maxChannels"] = quality_metrics["maxChannels"][
-        quality_metrics["phy_clusterID"].astype(int)
-    ]
+    # maxChannels is already indexed by unit_idx, no need to reindex by phy_clusterID
+    # (reindexing caused out-of-bounds when cluster IDs were large)
+    # quality_metrics_save["maxChannels"] = quality_metrics["maxChannels"][
+    #     quality_metrics["phy_clusterID"].astype(int)
+    # ]
 
     # Save full quality metrics table
     save_dict_as_parquet_and_csv(

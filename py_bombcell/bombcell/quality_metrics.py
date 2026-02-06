@@ -1166,6 +1166,7 @@ def waveform_shape(
     channel_positions,
     waveform_baseline_window,
     param,
+    unit_idx=None,
 ):
     """
     Calculates waveforms shape based quality metrics and unit information
@@ -1177,7 +1178,7 @@ def waveform_shape(
     this_unit : int
         The current unit ID
     maxChannels : ndarray
-        The max channel for each unit
+        The max channel for each unit (indexed by unit_idx when unit_idx is provided)
     channel_positions : ndarray
         The (x,y) positions of each channel
     waveform_baseline_window : ndarray
@@ -1211,9 +1212,21 @@ def waveform_shape(
         The width of the trough
     param : dict
         The parameters 
+    unit_idx : int, optional
+        The unit index (for maxChannels indexing). When provided, maxChannels[unit_idx] is used; otherwise maxChannels[this_unit] for backward compatibility.
     """
     min_thresh_detect_peaks_troughs = param["minThreshDetectPeaksTroughs"]
-    this_waveform = template_waveforms[this_unit, :, maxChannels[this_unit]]
+    # maxChannels is now indexed by unit_idx when provided, not by this_unit (cluster ID)
+    if unit_idx is not None and unit_idx < len(maxChannels):
+        max_channel_idx = int(maxChannels[unit_idx]) if not np.isnan(maxChannels[unit_idx]) else 0
+    else:
+        if this_unit < len(maxChannels):
+            max_channel_idx = int(maxChannels[this_unit]) if not np.isnan(maxChannels[this_unit]) else 0
+        else:
+            max_channel_idx = 0
+    if max_channel_idx < 0 or max_channel_idx >= template_waveforms.shape[2]:
+        max_channel_idx = 0
+    this_waveform = template_waveforms[this_unit, :, max_channel_idx]
 
     if param["spDecayLinFit"]:
         CHANNEL_TOLERANCE = 33 # need to make more restrictive. for most geometries, this includes all the channels.
@@ -1492,10 +1505,9 @@ def waveform_shape(
             else:
                 param["computeSpatialDecay"] = False
         if param["computeSpatialDecay"]:
-            # get waveforms spatial decay across channels
-            max_channel = maxChannels[this_unit]
+            # get waveforms spatial decay across channels (use max_channel_idx from above)
+            max_channel = max_channel_idx
 
-            
             x, y = channel_positions[max_channel, :]
             current_max_channel = channel_positions[max_channel, :]
 
@@ -1845,6 +1857,11 @@ def get_raw_amplitude(this_raw_waveform, gain_to_uV, peak_channel=None):
     
     # If peak_channel is specified and waveform is multi-channel, use only that channel
     if peak_channel is not None and this_raw_waveform_tmp.ndim == 2:
+        # Ensure peak_channel is a valid integer
+        if np.isnan(peak_channel) or peak_channel < 0 or peak_channel >= this_raw_waveform_tmp.shape[0]:
+            peak_channel = 0
+        else:
+            peak_channel = int(peak_channel)
         this_raw_waveform_tmp = this_raw_waveform_tmp[peak_channel, :]
     
     if ~np.isnan(gain_to_uV):

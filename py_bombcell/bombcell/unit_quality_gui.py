@@ -664,10 +664,11 @@ class InteractiveUnitQualityGUI:
         )
         self.unit_slider.observe(self.on_unit_change, names='value')
         
-        # Unit number input
+        # Unit number input (by Phy ID)
+        max_phy_id = self._get_max_phy_id()
         self.unit_input = widgets.IntText(
-            value=0, min=0, max=self.n_units-1,
-            description='Go to:', placeholder='Enter unit #'
+            value=self._get_phy_id(0), min=0, max=max(1, max_phy_id),
+            description='Go to (Phy ID):', placeholder='Enter Phy ID'
         )
         self.goto_unit_btn = widgets.Button(description='Go', button_style='primary')
         
@@ -840,10 +841,11 @@ class InteractiveUnitQualityGUI:
             self.unit_slider.value = self.current_unit_idx
             
     def goto_unit_number(self, b=None):
-        """Go to specific unit number"""
-        unit_num = self.unit_input.value
-        if 0 <= unit_num < self.n_units:
-            self.current_unit_idx = unit_num
+        """Go to unit by Phy ID (cluster ID)"""
+        phy_id = self.unit_input.value
+        unit_idx = self._get_unit_idx_from_phy_id(phy_id)
+        if unit_idx is not None:
+            self.current_unit_idx = unit_idx
             self.unit_slider.value = self.current_unit_idx
             self.update_display()
             
@@ -1103,7 +1105,40 @@ class InteractiveUnitQualityGUI:
             print(f"⚠️  Warning: Could not load manual classifications: {str(e)}")
             
         return None
-            
+
+    def _get_phy_id(self, unit_idx):
+        """Get Phy cluster ID for the given unit index (from quality_metrics or unique_units)."""
+        if self.quality_metrics is not None and isinstance(self.quality_metrics, dict):
+            phy_id = self.quality_metrics.get("phy_clusterID")
+            if phy_id is not None and hasattr(phy_id, '__len__') and unit_idx < len(phy_id):
+                return int(phy_id[unit_idx])
+        if unit_idx < len(self.unique_units):
+            return int(self.unique_units[unit_idx])
+        return 0
+
+    def _get_max_phy_id(self):
+        """Get the maximum Phy cluster ID (for display and Go to range)."""
+        if self.quality_metrics is not None and isinstance(self.quality_metrics, dict):
+            phy_id = self.quality_metrics.get("phy_clusterID")
+            if phy_id is not None and hasattr(phy_id, '__len__') and len(phy_id) > 0:
+                return int(np.nanmax(phy_id))
+        if len(self.unique_units) > 0:
+            return int(np.max(self.unique_units))
+        return 0
+
+    def _get_unit_idx_from_phy_id(self, phy_id):
+        """Get unit index for the given Phy cluster ID (for Go to by Phy ID)."""
+        if self.quality_metrics is not None and isinstance(self.quality_metrics, dict):
+            phy_arr = self.quality_metrics.get("phy_clusterID")
+            if phy_arr is not None and hasattr(phy_arr, '__len__'):
+                idx = np.where(np.asarray(phy_arr).astype(int) == int(phy_id))[0]
+                if len(idx) > 0:
+                    return int(idx[0])
+        idx = np.where(self.unique_units == int(phy_id))[0]
+        if len(idx) > 0:
+            return int(idx[0])
+        return None
+
     def get_unit_data(self, unit_idx):
         """Get data for a specific unit"""
         if unit_idx >= self.n_units:
@@ -1115,9 +1150,9 @@ class InteractiveUnitQualityGUI:
         spike_mask = self.ephys_data['spike_clusters'] == unit_id
         spike_times = self.ephys_data['spike_times'][spike_mask]
         
-        # Get template waveform
-        if unit_idx < len(self.ephys_data['template_waveforms']):
-            template = self.ephys_data['template_waveforms'][unit_idx]
+        # Get template waveform (template_waveforms is indexed by unit_id / cluster ID, not unit_idx)
+        if unit_id < len(self.ephys_data['template_waveforms']):
+            template = self.ephys_data['template_waveforms'][unit_id]
         else:
             template = np.zeros((82, 1))
             
@@ -1201,12 +1236,18 @@ class InteractiveUnitQualityGUI:
             # Show only BombCell classification
             classification_text = f"{bombcell_type_str}"
         
+        phy_id = self._get_phy_id(self.current_unit_idx)
+        max_phy_id = self._get_max_phy_id()
         info_html = f"""
-        <h1 style="color: {title_color}; text-align: center; font-size: 24px; margin: 10px 0;">Unit {unit_data['unit_id']} (phy ID = {self.current_unit_idx}, unit # {self.current_unit_idx+1}/{self.n_units}) - {classification_text}</h1>
+        <h1 style="color: {title_color}; text-align: center; font-size: 24px; margin: 10px 0;">Unit {phy_id} (unit # {phy_id}/{max_phy_id}) - {classification_text}</h1>
         """
         
         self.unit_info.value = info_html
-        
+
+        # Keep Go to (Phy ID) input in sync with current unit
+        if hasattr(self, 'unit_input') and self.unit_input is not None:
+            self.unit_input.value = phy_id
+
     def plot_unit(self, unit_idx):
         """Plot data for a specific unit with adaptive layout"""
         unit_data = self.get_unit_data(unit_idx)
@@ -1491,109 +1532,64 @@ class InteractiveUnitQualityGUI:
             return
         
         if self.raw_waveforms is not None:
+            raw_wf_id_match = self.raw_waveforms.get('id_match', None)
             raw_wf = self.raw_waveforms.get('average', None)
-            if raw_wf is not None:
-                try:
-                    if hasattr(raw_wf, '__len__') and self.current_unit_idx < len(raw_wf):
-                        waveforms = raw_wf[self.current_unit_idx]
-                        
-                        if hasattr(waveforms, 'shape') and len(waveforms.shape) > 1:
-                            # waveforms shape is (channels, time), need to transpose for plotting
-                            waveforms = waveforms.T  # Now (time, channels)
-                            # Multi-channel raw waveforms - use MATLAB spatial arrangement
-                            if 'maxChannels' in self.quality_metrics and self.current_unit_idx < len(self.quality_metrics['maxChannels']):
-                                max_ch = int(self.quality_metrics['maxChannels'][self.current_unit_idx])
-                            else:
-                                max_ch = int(metrics.get('maxChannels', 0))
-                            n_channels = waveforms.shape[1]  # Number of channels (after ensuring time x channels)
-                            
-                            # Find channels within 100μm of max channel (like MATLAB BombCell)
-                            if 'channel_positions' in self.ephys_data and len(self.ephys_data['channel_positions']) > 0 and max_ch < len(self.ephys_data['channel_positions']):
-                                positions = self.ephys_data['channel_positions']
-                                max_pos = positions[max_ch]
-                                
-                                # Calculate distances and find nearby channels
-                                channels_to_plot = []
-                                for ch in range(n_channels):
-                                    if ch < len(positions):
-                                        distance = np.sqrt(np.sum((positions[ch] - max_pos)**2))
-                                        if distance < 100:  # Within 100μm like MATLAB
-                                            channels_to_plot.append(ch)
-                                
-                                # Limit to 20 channels max like MATLAB
-                                if len(channels_to_plot) > 20:
-                                    # Sort by distance and take closest 20
-                                    distances = [(ch, np.sqrt(np.sum((positions[ch] - max_pos)**2))) for ch in channels_to_plot]
-                                    distances.sort(key=lambda x: x[1])
-                                    channels_to_plot = [ch for ch, _ in distances[:20]]
-                                
-                                if len(channels_to_plot) > 0:
-                                    # Calculate scaling factor like MATLAB
-                                    max_ch_waveform = waveforms[:, max_ch] if max_ch < waveforms.shape[1] else waveforms[:, 0]
-                                    scaling_factor = np.ptp(max_ch_waveform) * 2.5
-                                    
-                                    # Create time axis
-                                    time_axis = np.arange(waveforms.shape[0])
-                                    # Adjust time axis to center spike at 0 (assuming spike is at sample 20 for KS4)
-                                    if waveforms.shape[0] == 61:  # Kilosort 4
-                                        time_axis = time_axis - 20
-                                    elif waveforms.shape[0] == 82:  # Kilosort < 4
-                                        time_axis = time_axis - 41
-                                    
-                                    # Plot each channel at its spatial position
-                                    for ch in channels_to_plot:
-                                        if ch < n_channels:
-                                            waveform = waveforms[:, ch]
-                                            ch_pos = positions[ch]
-                                            
-                                            # Calculate X offset - use probe geometry with reasonable separation
-                                            waveform_width = waveforms.shape[0]  # Usually 82 samples
-                                            x_offset = (ch_pos[0] - max_pos[0]) * waveform_width * 0.06  # Slightly increased from original 0.05
-                                            
-                                            # Calculate Y offset based on channel Y position 
-                                            # We want channel 0 at bottom, so higher Y values go up
-                                            y_offset = ch_pos[1] / 100 * scaling_factor  # Use absolute position
-                                            
-                                            # Plot waveform (not flipped)
-                                            x_vals = time_axis + x_offset
-                                            y_vals = waveform + y_offset
-                                            
-                                            if ch == max_ch:
-                                                ax.plot(x_vals, y_vals, 'k-', linewidth=3)  # Max channel thicker black
-                                            else:
-                                                ax.plot(x_vals, y_vals, 'gray', linewidth=1, alpha=0.7)
-                                            
-                                            # Add channel number to the left of waveform
-                                            # Position based on the leftmost point of the waveform (time_axis[0])
-                                            ax.text(time_axis[0] + x_offset - 5, y_offset, f'{ch}', fontsize=13, ha='right', va='center', fontfamily="DejaVu Sans", zorder=20)
-                                    
-                                    # Don't mark peaks and troughs on this spatial plot
-                                    
-                                    # Don't invert - channel 0 (Y=0) naturally at bottom
-                                    ax.axis('tight')
-                                    ax.set_aspect('auto')
-                            else:
-                                # Fallback: plot multiple channels overlaid
-                                time_axis = np.arange(waveforms.shape[0])
-                                
-                                # Plot nearby channels
-                                channels_to_show = min(10, waveforms.shape[1])  # Show up to 10 channels
-                                for i in range(channels_to_show):
-                                    if i == max_ch and max_ch < waveforms.shape[1]:
-                                        ax.plot(time_axis, waveforms[:, i], 'k-', linewidth=2, alpha=1.0, label=f'Ch {i} (max)')
-                                    else:
-                                        ax.plot(time_axis, waveforms[:, i], 'gray', linewidth=1, alpha=0.5)
-                                
-                                ax.legend(loc='best', fontsize=8)
-                                ax.set_xlabel('Time (samples)')
-                                ax.set_ylabel('Amplitude')
-                        else:
-                            # Single channel
-                            ax.plot(waveforms, 'b-', alpha=0.7)
-                            
-                except (TypeError, IndexError, AttributeError):
-                    ax.text(0.5, 0.5, 'Raw waveforms\n(data format issue)', 
-                            ha='center', va='center', transform=ax.transAxes, fontfamily="DejaVu Sans")
+            current_unit_id = self.unique_units[self.current_unit_idx]
+            waveforms = None
+            if raw_wf_id_match is not None and current_unit_id < len(raw_wf_id_match):
+                waveforms = raw_wf_id_match[current_unit_id]
+            elif raw_wf is not None and hasattr(raw_wf, '__len__') and self.current_unit_idx < len(raw_wf):
+                waveforms = raw_wf[self.current_unit_idx]
+
+            if waveforms is not None and hasattr(waveforms, 'shape') and len(waveforms.shape) > 1:
+                waveforms = waveforms.T  # (time, channels)
+                if 'maxChannels' in self.quality_metrics and self.current_unit_idx < len(self.quality_metrics['maxChannels']):
+                    max_ch = int(self.quality_metrics['maxChannels'][self.current_unit_idx])
+                else:
+                    max_ch = int(metrics.get('maxChannels', 0))
+                n_channels = waveforms.shape[1]
+                if 'channel_positions' in self.ephys_data and len(self.ephys_data['channel_positions']) > 0 and max_ch < len(self.ephys_data['channel_positions']):
+                    positions = self.ephys_data['channel_positions']
+                    max_pos = positions[max_ch]
+                    channels_to_plot = []
+                    for ch in range(n_channels):
+                        if ch < len(positions):
+                            distance = np.sqrt(np.sum((positions[ch] - max_pos)**2))
+                            if distance < 100:
+                                channels_to_plot.append(ch)
+                    if len(channels_to_plot) > 20:
+                        distances = [(ch, np.sqrt(np.sum((positions[ch] - max_pos)**2))) for ch in channels_to_plot]
+                        distances.sort(key=lambda x: x[1])
+                        channels_to_plot = [ch for ch, _ in distances[:20]]
+                    if len(channels_to_plot) > 0:
+                        max_ch_waveform = waveforms[:, max_ch] if max_ch < waveforms.shape[1] else waveforms[:, 0]
+                        scaling_factor = np.ptp(max_ch_waveform) * 2.5
+                        time_axis = np.arange(waveforms.shape[0])
+                        if waveforms.shape[0] == 61:
+                            time_axis = time_axis - 20
+                        elif waveforms.shape[0] == 82:
+                            time_axis = time_axis - 41
+                        for ch in channels_to_plot:
+                            if ch < n_channels:
+                                waveform = waveforms[:, ch]
+                                ch_pos = positions[ch]
+                                waveform_width = waveforms.shape[0]
+                                x_offset = (ch_pos[0] - max_pos[0]) * waveform_width * 0.06
+                                y_offset = ch_pos[1] / 100 * scaling_factor
+                                x_vals = time_axis + x_offset
+                                y_vals = waveform + y_offset
+                                if ch == max_ch:
+                                    ax.plot(x_vals, y_vals, 'k-', linewidth=3)
+                                else:
+                                    ax.plot(x_vals, y_vals, 'gray', linewidth=1, alpha=0.7)
+                                ax.text(time_axis[0] + x_offset - 5, y_offset, f'{ch}', fontsize=13, ha='right', va='center', fontfamily="DejaVu Sans", zorder=20)
+                        ax.set_title('Mean raw waveforms', fontsize=15, fontweight='bold', fontfamily="DejaVu Sans")
+                        return
+                # Waveforms available but no channel positions or no channels to plot
+                ax.text(0.5, 0.5, 'Mean raw waveforms\n(no channel layout)', 
+                        ha='center', va='center', transform=ax.transAxes, fontfamily="DejaVu Sans")
+                ax.set_title('Mean raw waveforms', fontsize=15, fontweight='bold', fontfamily="DejaVu Sans")
+                return
         else:
             ax.text(0.5, 0.5, 'Mean raw waveforms\n(not available)', 
                     ha='center', va='center', transform=ax.transAxes, fontfamily="DejaVu Sans")
@@ -3638,12 +3634,15 @@ def load_metrics_for_gui(ks_dir, quality_metrics, ephys_properties=None, param=N
     # Load raw waveforms if available
     raw_waveforms = None
     raw_wf_path = bombcell_path / "templates._bc_rawWaveforms.npy"
+    raw_wf_id_match_path = bombcell_path / "_bc_rawWaveforms_kilosort_format.npy"
     if raw_wf_path.exists():
         try:
             raw_waveforms = {
                 'average': np.load(raw_wf_path, allow_pickle=True),
                 'peak_channels': np.load(bombcell_path / "templates._bc_rawWaveformPeakChannels.npy", allow_pickle=True)
             }
+            if raw_wf_id_match_path.exists():
+                raw_waveforms['id_match'] = np.load(raw_wf_id_match_path, allow_pickle=True)
         except FileNotFoundError:
             raw_waveforms = None
     

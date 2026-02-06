@@ -355,9 +355,17 @@ def generate_waveform_overlay(
     # if the current unit type has more than 0 units, generate a plot
     if n_units_of_type > 0:
         for template_id in unit_type_template_ids:
-            max_channel_id = quality_metrics["maxChannels"][template_id]
-            template_max_waveform = template_waveforms[template_id, 0:, max_channel_id] # template waveforms comes from load_ephys_data
-            ax.plot(template_max_waveform, color="black", alpha=0.1)
+            # Find unit_idx from template_id (cluster ID); maxChannels is indexed by unit_idx
+            unit_idx = np.where(unique_templates == template_id)[0]
+            if len(unit_idx) > 0:
+                unit_idx = unit_idx[0]
+                max_channel_id = quality_metrics["maxChannels"][unit_idx]
+                # Check if max_channel_id is valid (not NaN and within bounds)
+                if not np.isnan(max_channel_id) and max_channel_id >= 0 and template_id < template_waveforms.shape[0]:
+                    max_channel_id = int(max_channel_id)
+                    if max_channel_id < template_waveforms.shape[2]:
+                        template_max_waveform = template_waveforms[template_id, 0:, max_channel_id]
+                        ax.plot(template_max_waveform, color="black", alpha=0.1)
             ax.spines[["right", "top", "bottom", "left"]].set_visible(False)
             ax.set_xticks([])
             ax.set_yticks([])
