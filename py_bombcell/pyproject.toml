@@ -38,10 +38,12 @@ dependencies = [
     "tqdm>=4.50.0",
     "pyarrow>=5.0.0",
     "numba>=0.58.1",
-    "upsetplot",
     "mtscomp",
     "cachecache",
 ]
+
+[project.optional-dependencies]
+upset = ["upsetplot==0.9.0"]
 
 [project.urls]
 Homepage = "https://github.com/Julie-Fabre/bombcell"

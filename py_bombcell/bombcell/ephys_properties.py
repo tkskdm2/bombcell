@@ -8,6 +8,7 @@ import gc
 from pathlib import Path
 from tqdm.auto import tqdm
 from .ccg_fast import acg as compute_acg_fast
+from .save_utils import to_parquet_safe
 
 __all__ = [
     'run_all_ephys_properties',
@@ -809,12 +810,12 @@ def save_ephys_properties(ephys_properties, save_path, ephys_param):
     
     # Save to parquet
     ephys_file = os.path.join(save_path, 'templates._bc_ephysProperties.parquet')
-    df_ephys.to_parquet(ephys_file, index=False)
+    to_parquet_safe(df_ephys, ephys_file, index=False)
     
     # Save parameters
     param_df = pd.DataFrame([ephys_param])
     param_file = os.path.join(save_path, '_bc_ephysParameters.parquet')
-    param_df.to_parquet(param_file, index=False)
+    to_parquet_safe(param_df, param_file, index=False)
     
     print(f"Ephys properties saved to: {ephys_file}")
     print(f"Parameters saved to: {param_file}")

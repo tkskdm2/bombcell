@@ -330,3 +330,101 @@ quality_metrics_save = quality_metrics.copy()
 
 2026年1月（具体的な日付は変更履歴を参照）
 
+---
+
+### 6. 今回の変更（Parquet 安定化・UpSet プロットの堅牢化）
+
+#### 変更の概要（今回）
+
+- Parquet 出力時の `ValueError: parquet must have string column names` を解消するため、列名を文字列に正規化してから書き込む `to_parquet_safe` を導入し、すべての parquet 書き込みで使用するように変更しました。
+- UpSet プロットについて、有効な指標が 2 未満の場合はスキップし、ライブラリ不整合時は例外を捕捉して警告のみとし、Bombcell 全体が落ちないようにしました。
+- （任意）upsetplot を optional dependency に変更し、headless 環境での安定性を向上させました。
+
+#### 変更されたファイル（今回）
+
+##### `save_utils.py`
+
+- **場所**: 約19行目付近（path_handler の直後）、約208行目、約240行目
+- **追加**: `to_parquet_safe(df, path, **kwargs)` — 列名を文字列にしてから `df.to_parquet(path, **kwargs)` を呼ぶ。
+- **変更**: `save_dict_as_parquet_and_csv` / `save_params_as_parquet` 内の `to_parquet` 呼び出しを `to_parquet_safe` に変更。
+
+**変更前**:
+```python
+quality_metrics_df.to_parquet(file_path + ".parquet")
+```
+```python
+param_df.to_parquet(str(file_path) + ".parquet")
+```
+
+**変更後**:
+```python
+to_parquet_safe(quality_metrics_df, file_path + ".parquet")
+```
+```python
+to_parquet_safe(param_df, str(file_path) + ".parquet")
+```
+
+##### `helper_functions.py`
+
+- **場所**: 約14行目（import）、約1084行目（get_all_quality_metrics 内）
+- **変更**: parquet 書き込みを `to_parquet_safe` に変更。`from bombcell.save_utils import ... to_parquet_safe` を追加。
+
+**変更前**:
+```python
+df.to_parquet(Path(save_path) / "templates._bc_fractionRefractoryPeriodViolationsPerTauR.parquet")
+```
+
+**変更後**:
+```python
+to_parquet_safe(df, Path(save_path) / "templates._bc_fractionRefractoryPeriodViolationsPerTauR.parquet")
+```
+
+##### `ephys_properties.py`
+
+- **場所**: 約11行目（import）、約812行目・817行目（save_ephys_properties 内）
+- **変更**: `df_ephys.to_parquet` / `param_df.to_parquet` を `to_parquet_safe(..., index=False)` に変更。`from .save_utils import to_parquet_safe` を追加。
+
+**変更前**:
+```python
+df_ephys.to_parquet(ephys_file, index=False)
+param_df.to_parquet(param_file, index=False)
+```
+
+**変更後**:
+```python
+to_parquet_safe(df_ephys, ephys_file, index=False)
+to_parquet_safe(param_df, param_file, index=False)
+```
+
+##### `plot_functions.py`
+
+- **場所**: 約383–442行目、`generate_upset_plot` 関数内
+- **変更内容**: upsetplot が利用不可の場合は先頭で return。有効な指標列を `unit_type_data.fillna(False).astype(bool)` のうえで `active_cols` として算出し、2 未満の場合は return でスキップ。2 以上の場合のみ `from_indicators(active_cols, data=unit_type_data[active_cols])` と `UpSet(..., min_degree=1)` を実行。例外処理を `ImportError` 等も含むように拡張し、警告メッセージに pandas / upsetplot のバージョンを追加。
+
+**変更後（要約）**:
+```python
+if not UPSETPLOT_AVAILABLE:
+    return
+# ... データ準備 ...
+unit_type_data = unit_type_data.fillna(False).astype(bool)
+active_cols = [c for c in unit_type_data.columns if unit_type_data[c].any()]
+if n_unit_type > 0 and len(active_cols) < 2:
+    return
+upset = UpSet(from_indicators(active_cols, data=unit_type_data[active_cols]), min_degree=1)
+# 例外は (ImportError, AttributeError, ValueError, Exception) を捕捉し、警告にバージョン情報を付与
+```
+
+##### `pyproject.toml`（任意）
+
+- **場所**: dependencies ブロック、約31–44行目付近
+- **変更**: `upsetplot` を必須依存から削除し、`[project.optional-dependencies]` に `upset = ["upsetplot==0.9.0"]` を追加。
+
+#### 変更の影響（今回）
+
+- Parquet 出力時の「parquet must have string column names」エラーが解消され、整数列名などでも安定して parquet が書き出されます。
+- UpSet プロットは、単一指標やライブラリ不整合時にもクラッシュせず、スキップまたは警告のみで Bombcell の実行が継続します。既存の正常系の動作は変更しません。
+
+#### 変更日（今回）
+
+2026年2月
+

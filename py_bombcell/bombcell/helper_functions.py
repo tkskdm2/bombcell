@@ -11,7 +11,7 @@ from bombcell.loading_utils import load_ephys_data
 
 # import matplotlib.pyplot as plt
 import bombcell.quality_metrics as qm
-from bombcell.save_utils import get_metric_keys, save_results
+from bombcell.save_utils import get_metric_keys, save_results, to_parquet_safe
 from bombcell.plot_functions import *
 
 
@@ -1081,7 +1081,7 @@ def get_all_quality_metrics(
     df = pd.DataFrame(RPV_tauR_estimate_units_NtauR,
                       columns=tauR_window,
                       index=[el[0] for el in RPV_tauR_estimate_units_NtauR])
-    df.to_parquet(Path(save_path) / "templates._bc_fractionRefractoryPeriodViolationsPerTauR.parquet")
+    to_parquet_safe(df, Path(save_path) / "templates._bc_fractionRefractoryPeriodViolationsPerTauR.parquet")
 
     if param["computeDistanceMetrics"]:
         runtimes["time_dist_metrics"] = runtime_dist_metrics

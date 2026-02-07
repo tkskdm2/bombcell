@@ -3,7 +3,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from typing import Dict, Tuple, List
+from typing import Dict, Tuple, List, Union
 from numpy.typing import NDArray
 
 from cachecache import Cacher, distributed_cacher
@@ -16,6 +16,14 @@ def path_handler(path: str) -> None:
     assert path.parent.exists(), f"{str(path.parent)} must exist to create {str(path)}."
     path.mkdir(exist_ok=True)
     return path
+
+
+def to_parquet_safe(df: pd.DataFrame, path: Union[str, Path], **kwargs) -> None:
+    """Write parquet with guaranteed string column names (parquet requirement)."""
+    if not all(isinstance(c, str) for c in df.columns):
+        df = df.copy(deep=False)
+        df.columns = [str(c) for c in df.columns]
+    df.to_parquet(path, **kwargs)
 
 def get_metric_keys():
     return [
@@ -199,7 +207,7 @@ def save_dict_as_parquet_and_csv(
 
     file_path = str(save_path / file_name)
     quality_metrics_df = pd.DataFrame.from_dict(dic)
-    quality_metrics_df.to_parquet(file_path + ".parquet")
+    to_parquet_safe(quality_metrics_df, file_path + ".parquet")
     quality_metrics_df.to_csv(file_path + ".csv")
 
 
@@ -231,7 +239,7 @@ def save_params_as_parquet(
 
     file_path = save_path / file_name
     param_df = pd.DataFrame.from_dict([param_save])
-    param_df.to_parquet(str(file_path) + ".parquet")
+    to_parquet_safe(param_df, str(file_path) + ".parquet")
 
 
 def save_waveforms_as_npy(raw_waveforms_full, raw_waveforms_peak_channel, raw_waveforms_id_match, save_path):

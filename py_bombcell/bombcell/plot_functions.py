@@ -381,10 +381,12 @@ def generate_waveform_overlay(
 
 
 def generate_upset_plot(
-        qm_table: pd.DataFrame, 
+        qm_table: pd.DataFrame,
         unit_type_str: str,
         fig: matplotlib.figure.Figure = None,
 ):
+    if not UPSETPLOT_AVAILABLE:
+        return
     try:
         # ensure upper case
         unit_type_str = unit_type_str.upper()
@@ -398,7 +400,7 @@ def generate_upset_plot(
             unit_type_metrics = ["SNR", "amplitude", "presence ratio", "# spikes", "% spikes missing", "fraction RPVs", "max. drift", "isolation dist.", "L-ratio"]
         else:
             raise ValueError(f"Invalid unit type {unit_type_str} - allowed values are 'NOISE', 'NON-SOMA', 'NON-SOMA GOOD', 'NON-SOMA MUA', 'MUA'")
-        
+
         # filter out uncomputed metrics
         unit_type_metrics = [m for m in unit_type_metrics if m in qm_table.columns]
 
@@ -423,23 +425,36 @@ def generate_upset_plot(
         metric_display_names = [display_names.get(metric_name, metric_name) for metric_name in unit_type_metrics]
         unit_type_data.columns = metric_display_names
 
+        # coerce to booleans for upsetplot
+        unit_type_data = unit_type_data.fillna(False).astype(bool)
+
         # count the number of units of the chosen type
         n_unit_type = unit_type_mask.sum()
-        
+
+        # active indicator columns: those with any True
+        active_cols = [c for c in unit_type_data.columns if unit_type_data[c].any()]
+
+        # skip if fewer than 2 active columns (not informative / known upsetplot edge-case)
+        if n_unit_type > 0 and len(active_cols) < 2:
+            return
+
         # count the total number of units
         n_total_units = len(qm_table)
-        
-        # check how many columns have True values
-        n_cols_with_true_vals = (unit_type_data.sum() > 0).sum()
-        if n_cols_with_true_vals >= 1 and n_unit_type > 0:
-            upset = UpSet(from_indicators(metric_display_names, data=unit_type_data), min_degree=1)
-            upset.plot(fig=fig)
-            plt.suptitle(f"Units classified as {unit_type_str.lower()} (n = {n_unit_type}/{n_total_units})")
-        elif n_unit_type > 0:
-            print(f"{unit_type_str.capitalize()} upset plot skipped: no metrics have failures")
-    except (AttributeError, ValueError) as e:
-        import warnings
-        warnings.warn(f"Could not create {unit_type_str.lower()} upset plot due to library compatibility: {e}", RuntimeWarning)
+
+        upset = UpSet(from_indicators(active_cols, data=unit_type_data[active_cols]), min_degree=1)
+        upset.plot(fig=fig)
+        plt.suptitle(f"Units classified as {unit_type_str.lower()} (n = {n_unit_type}/{n_total_units})")
+    except (ImportError, AttributeError, ValueError, Exception) as e:
+        try:
+            import upsetplot
+            upsetplot_version = getattr(upsetplot, "__version__", "n/a")
+        except ImportError:
+            upsetplot_version = "n/a"
+        warnings.warn(
+            f"Could not create {unit_type_str.lower()} upset plot: {e} "
+            f"(pandas={pd.__version__}, upsetplot={upsetplot_version})",
+            RuntimeWarning
+        )
 
 def generate_histogram(
         metric_name, 
